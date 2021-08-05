@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -16,8 +15,6 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/trace/info"
 	"github.com/DataDog/datadog-agent/pkg/trace/logutil"
-	"github.com/DataDog/datadog-agent/pkg/trace/metrics"
-	"github.com/DataDog/datadog-agent/pkg/util/fargate"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
@@ -73,13 +70,8 @@ func (r *HTTPReceiver) profileProxyHandler() http.Handler {
 	}
 	tags := fmt.Sprintf("host:%s,default_env:%s,agent_version:%s", r.conf.Hostname, r.conf.DefaultEnv, info.Version)
 	if r.conf.IsFargate {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		orch := fargate.GetOrchestrator(ctx)
-		cancel()
-		if err := ctx.Err(); err != nil && err != context.Canceled {
-			log.Warnf("Failed to get Fargate orchestrator. This may cause issues with your profiles: %v", err)
-		}
-		tag := fmt.Sprintf("orchestrator:fargate_%s", strings.ToLower(string(orch)))
+		orch := getOrchestrator()
+		tag := fmt.Sprintf("orchestrator:fargate_%s", strings.ToLower(orch))
 		tags = tags + "," + tag
 	}
 	return newProfileProxy(r.conf.NewHTTPTransport(), targets, keys, tags)
@@ -101,25 +93,11 @@ func errorHandler(err error) http.Handler {
 // The tags will be added as a header to all proxied requests.
 // For more details please see multiTransport.
 func newProfileProxy(transport http.RoundTripper, targets []*url.URL, keys []string, tags string) *httputil.ReverseProxy {
-	director := func(req *http.Request) {
-		req.Header.Set("Via", fmt.Sprintf("trace-agent %s", info.Version))
-		if _, ok := req.Header["User-Agent"]; !ok {
-			// explicitly disable User-Agent so it's not set to the default value
-			// that net/http gives it: Go-http-client/1.1
-			// See https://codereview.appspot.com/7532043
-			req.Header.Set("User-Agent", "")
-		}
-		containerID := req.Header.Get(headerContainerID)
-		if ctags := getContainerTags(containerID); ctags != "" {
-			req.Header.Set("X-Datadog-Container-Tags", ctags)
-		}
-		req.Header.Set("X-Datadog-Additional-Tags", tags)
-		metrics.Count("datadog.trace_agent.profile", 1, nil, 1)
-		// URL, Host and key are set in the transport for each outbound request
-	}
 	logger := logutil.NewThrottled(5, 10*time.Second) // limit to 5 messages every 10 seconds
+	// URL, Host and key are set in the transport for each outbound request
+	// headers are set in the director
 	return &httputil.ReverseProxy{
-		Director:  director,
+		Director:  getHeaderDecoratorDirector(tags, "profile"),
 		ErrorLog:  stdlog.New(logger, "profiling.Proxy: ", 0),
 		Transport: &multiTransport{transport, targets, keys},
 	}

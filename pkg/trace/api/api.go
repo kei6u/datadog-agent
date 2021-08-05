@@ -45,6 +45,7 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/trace/pb"
 	"github.com/DataDog/datadog-agent/pkg/trace/sampler"
 	"github.com/DataDog/datadog-agent/pkg/trace/watchdog"
+	"github.com/DataDog/datadog-agent/pkg/util/fargate"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
@@ -761,4 +762,35 @@ func getMediaType(req *http.Request) string {
 		return "application/json"
 	}
 	return mt
+}
+
+// getDirector returns a director for a httputil.ReverseProxy. It enriches requests with headers setting custom
+// container and additional tags and overwrites the user agent header.
+func getHeaderDecoratorDirector(tags string, metricSuffix string) func(req *http.Request) {
+	return func(req *http.Request) {
+		req.Header.Set("Via", fmt.Sprintf("trace-agent %s", info.Version))
+		if _, ok := req.Header["User-Agent"]; !ok {
+			// explicitly disable User-Agent so it's not set to the default value
+			// that net/http gives it: Go-http-client/1.1
+			// See https://codereview.appspot.com/7532043
+			req.Header.Set("User-Agent", "")
+		}
+		containerID := req.Header.Get(headerContainerID)
+		if ctags := getContainerTags(containerID); ctags != "" {
+			req.Header.Set("X-Datadog-Container-Tags", ctags)
+		}
+		req.Header.Set("X-Datadog-Additional-Tags", tags)
+		_ = metrics.Count("datadog.trace_agent."+metricSuffix, 1, nil, 1)
+	}
+}
+
+// getOrchestrator returns the fargate orchestrator. Should only be called if the agent is running in ECS or EKS.
+func getOrchestrator() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	orch := fargate.GetOrchestrator(ctx)
+	cancel()
+	if err := ctx.Err(); err != nil && err != context.Canceled {
+		_ = log.Warnf("Failed to get Fargate orchestrator. This may cause issues with your snapshots: %v", err)
+	}
+	return string(orch)
 }
