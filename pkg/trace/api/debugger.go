@@ -26,20 +26,13 @@ const (
 	logsIntakeURLTemplate = "https://http-intake.logs.%s/v1/input"
 	// logsIntakeDefaultURL specifies the default intake API URL.
 	logsIntakeDefaultURL = "https://http-intake.logs.datadoghq.com/v1/input"
-
-	// debuggerRequestMetricsPrefix is the prefix for the following debugger metric names.
-	debuggerRequestMetricsPrefix       = "datadog.trace_agent.debugger."
-	debuggerRequestCountMetricsName    = debuggerRequestMetricsPrefix + "proxy_request"
-	debuggerRequestDurationMetricsName = debuggerRequestMetricsPrefix + "proxy_request_duration_ms"
-	debuggerRequestErrorMetricsName    = debuggerRequestMetricsPrefix + "proxy_request_error"
 )
 
 // debuggerProxyHandler returns an http.Handler proxying requests to the logs intake. If the logs intake url cannot be
 // parsed, the returned handler will always return http.StatusInternalServerError with a clarifying message.
 func (r *HTTPReceiver) debuggerProxyHandler() http.Handler {
 	tags := fmt.Sprintf("host:%s,default_env:%s,agent_version:%s", r.conf.Hostname, r.conf.DefaultEnv, info.Version)
-	orch := r.conf.FargateOrchestrator
-	if orch != fargate.Unknown {
+	if orch := r.conf.FargateOrchestrator; orch != fargate.Unknown {
 		tag := fmt.Sprintf("orchestrator:fargate_%s", strings.ToLower(string(orch)))
 		tags = tags + "," + tag
 	}
@@ -82,16 +75,15 @@ type roundTripper struct {
 }
 
 func (r *roundTripper) RoundTrip(req *http.Request) (res *http.Response, err error) {
-	now := time.Now()
-	defer func() {
-		tags := []string{"path:" + req.URL.Path}
-		metrics.Count(debuggerRequestCountMetricsName, 1, tags, 1)
-		metrics.Timing(debuggerRequestDurationMetricsName, time.Since(now), tags, 1)
+	defer func(now time.Time) {
+		var tags []string
+		metrics.Count(("datadog.trace_agent.debugger.")+"proxy_request", 1, tags, 1)
+		metrics.Timing(("datadog.trace_agent.debugger.")+"proxy_request_duration_ms", time.Since(now), tags, 1)
 		if err != nil {
-			tags = append(tags, fmt.Sprintf("error:%s", fmt.Sprintf("%T", err)))
-			metrics.Count(debuggerRequestErrorMetricsName, 1, tags, 1)
+			tags := append(tags, fmt.Sprintf("error:%s", fmt.Sprintf("%T", err)))
+			metrics.Count(("datadog.trace_agent.debugger.")+"proxy_request_error", 1, tags, 1)
 		}
-	}()
+	}(time.Now())
 	req.Header.Set("DD-API-KEY", r.key)
 	req.URL = r.url
 	req.Host = r.url.Host
