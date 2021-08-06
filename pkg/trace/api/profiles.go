@@ -70,8 +70,7 @@ func (r *HTTPReceiver) profileProxyHandler() http.Handler {
 		return errorHandler(err)
 	}
 	tags := fmt.Sprintf("host:%s,default_env:%s,agent_version:%s", r.conf.Hostname, r.conf.DefaultEnv, info.Version)
-	orch := r.conf.FargateOrchestrator
-	if orch != fargate.Unknown {
+	if orch := r.conf.FargateOrchestrator; orch != fargate.Unknown {
 		tag := fmt.Sprintf("orchestrator:fargate_%s", strings.ToLower(string(orch)))
 		tags = tags + "," + tag
 	}
