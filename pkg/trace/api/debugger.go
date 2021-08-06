@@ -77,11 +77,11 @@ type roundTripper struct {
 func (r *roundTripper) RoundTrip(req *http.Request) (res *http.Response, err error) {
 	defer func(now time.Time) {
 		var tags []string
-		metrics.Count(("datadog.trace_agent.debugger.")+"proxy_request", 1, tags, 1)
-		metrics.Timing(("datadog.trace_agent.debugger.")+"proxy_request_duration_ms", time.Since(now), tags, 1)
+		metrics.Count("datadog.trace_agent.debugger.proxy_request", 1, tags, 1)
+		metrics.Timing("datadog.trace_agent.debugger.proxy_request_duration_ms", time.Since(now), tags, 1)
 		if err != nil {
 			tags := append(tags, fmt.Sprintf("error:%s", fmt.Sprintf("%T", err)))
-			metrics.Count(("datadog.trace_agent.debugger.")+"proxy_request_error", 1, tags, 1)
+			metrics.Count("datadog.trace_agent.debugger.proxy_request_error", 1, tags, 1)
 		}
 	}(time.Now())
 	req.Header.Set("DD-API-KEY", r.key)
