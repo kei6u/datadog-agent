@@ -17,6 +17,8 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/trace/info"
 	"github.com/DataDog/datadog-agent/pkg/trace/logutil"
+	"github.com/DataDog/datadog-agent/pkg/trace/metrics"
+	"github.com/DataDog/datadog-agent/pkg/util/fargate"
 )
 
 const (
@@ -24,15 +26,21 @@ const (
 	logsIntakeURLTemplate = "https://http-intake.logs.%s/v1/input"
 	// logsIntakeDefaultURL specifies the default intake API URL.
 	logsIntakeDefaultURL = "https://http-intake.logs.datadoghq.com/v1/input"
+
+	// debuggerRequestMetricsPrefix is the prefix for the following debugger metric names.
+	debuggerRequestMetricsPrefix       = "datadog.trace_agent.debugger."
+	debuggerRequestCountMetricsName    = debuggerRequestMetricsPrefix + "proxy_request"
+	debuggerRequestDurationMetricsName = debuggerRequestMetricsPrefix + "proxy_request_duration_ms"
+	debuggerRequestErrorMetricsName    = debuggerRequestMetricsPrefix + "proxy_request_error"
 )
 
 // debuggerProxyHandler returns an http.Handler proxying requests to the logs intake. If the logs intake url cannot be
 // parsed, the returned handler will always return http.StatusInternalServerError with a clarifying message.
 func (r *HTTPReceiver) debuggerProxyHandler() http.Handler {
 	tags := fmt.Sprintf("host:%s,default_env:%s,agent_version:%s", r.conf.Hostname, r.conf.DefaultEnv, info.Version)
-	if r.conf.IsFargate {
-		orch := getOrchestrator()
-		tag := fmt.Sprintf("orchestrator:fargate_%s", strings.ToLower(orch))
+	orch := r.conf.FargateOrchestrator
+	if orch != fargate.Unknown {
+		tag := fmt.Sprintf("orchestrator:fargate_%s", strings.ToLower(string(orch)))
 		tags = tags + "," + tag
 	}
 	intake := logsIntakeDefaultURL
@@ -60,7 +68,7 @@ func debuggerErrorHandler(err error) http.Handler {
 func newDebuggerProxy(rt http.RoundTripper, target *url.URL, key string, tags string) *httputil.ReverseProxy {
 	logger := logutil.NewThrottled(5, 10*time.Second) // limit to 5 messages every 10 seconds
 	return &httputil.ReverseProxy{
-		Director:  getHeaderDecoratorDirector(tags, "debugger"),
+		Director:  headerDecoratorDirector(tags, "debugger"),
 		ErrorLog:  stdlog.New(logger, "debugger.Proxy: ", 0),
 		Transport: &roundTripper{target, key, rt},
 	}
@@ -73,7 +81,17 @@ type roundTripper struct {
 	rt  http.RoundTripper
 }
 
-func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+func (r *roundTripper) RoundTrip(req *http.Request) (res *http.Response, err error) {
+	now := time.Now()
+	defer func() {
+		tags := []string{"path:" + req.URL.Path}
+		metrics.Count(debuggerRequestCountMetricsName, 1, tags, 1)
+		metrics.Timing(debuggerRequestDurationMetricsName, time.Since(now), tags, 1)
+		if err != nil {
+			tags = append(tags, fmt.Sprintf("error:%s", fmt.Sprintf("%T", err)))
+			metrics.Count(debuggerRequestErrorMetricsName, 1, tags, 1)
+		}
+	}()
 	req.Header.Set("DD-API-KEY", r.key)
 	req.URL = r.url
 	req.Host = r.url.Host

@@ -108,7 +108,7 @@ func TestDebuggerProxyHandler(t *testing.T) {
 		}
 		conf := newTestReceiverConfig()
 		conf.Hostname = "myhost"
-		conf.IsFargate = true
+		conf.FargateOrchestrator = "orchestrator"
 		receiver := newTestReceiverFromConfig(conf)
 		receiver.debuggerProxyHandler().ServeHTTP(httptest.NewRecorder(), req)
 		if !called {
