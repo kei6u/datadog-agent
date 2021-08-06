@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"fmt"
+	"github.com/DataDog/datadog-agent/pkg/util/fargate"
 	"io"
 	"io/ioutil"
 	stdlog "log"
@@ -69,9 +70,9 @@ func (r *HTTPReceiver) profileProxyHandler() http.Handler {
 		return errorHandler(err)
 	}
 	tags := fmt.Sprintf("host:%s,default_env:%s,agent_version:%s", r.conf.Hostname, r.conf.DefaultEnv, info.Version)
-	if r.conf.IsFargate {
-		orch := getOrchestrator()
-		tag := fmt.Sprintf("orchestrator:fargate_%s", strings.ToLower(orch))
+	orch := r.conf.FargateOrchestrator
+	if orch != fargate.Unknown {
+		tag := fmt.Sprintf("orchestrator:fargate_%s", strings.ToLower(string(orch)))
 		tags = tags + "," + tag
 	}
 	return newProfileProxy(r.conf.NewHTTPTransport(), targets, keys, tags)
@@ -97,7 +98,7 @@ func newProfileProxy(transport http.RoundTripper, targets []*url.URL, keys []str
 	// URL, Host and key are set in the transport for each outbound request
 	// headers are set in the director
 	return &httputil.ReverseProxy{
-		Director:  getHeaderDecoratorDirector(tags, "profile"),
+		Director:  headerDecoratorDirector(tags, "profile"),
 		ErrorLog:  stdlog.New(logger, "profiling.Proxy: ", 0),
 		Transport: &multiTransport{transport, targets, keys},
 	}
